@@ -1,0 +1,105 @@
+{
+  "nodes": {
+    "dep1": {
+      "inputs": {
+        "subdirFlake": [
+          "subdirFlake"
+        ],
+        "systems": [
+          "systems"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792906473,
+        "narHash": "sha256-g7OKMcJV9XgfuZsPzN4WneX9/PE7qd7X/W10Ue7tuic=",
+        "path": "/home/loner/Templates/fip/tests/dep1",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/loner/Templates/fip/tests/dep1",
+        "type": "path"
+      }
+    },
+    "dep1-wrapper": {
+      "inputs": {
+        "dep1": [
+          "dep1"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792906473,
+        "narHash": "sha256-D/g3O+pBKcH8BvgzYvdGvGUse8g/TSfiHTsM8ETF6Ic=",
+        "path": "/home/loner/Templates/fip/tests/dep1-wrapper",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/loner/Templates/fip/tests/dep1-wrapper",
+        "type": "path"
+      }
+    },
+    "fip": {
+      "locked": {
+        "lastModified": 1792945361,
+        "narHash": "sha256-Do5c9XuiDNri4w6d4s1Do3L+9RCvZP9BNsn51bBm2TQ=",
+        "path": "/home/loner/Templates/fip",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/loner/Templates/fip",
+        "type": "path"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1792773339,
+        "narHash": "sha256-rZLrzrC6i+jnTAlvPZHogKDulY7WWDEv9hJeHieO7Zw=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3ec636362e1816bc2f0888fa0fa2c69f1bc9e504",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "dep1": "dep1",
+        "dep1-wrapper": "dep1-wrapper",
+        "fip": "fip",
+        "nixpkgs": "nixpkgs",
+        "subdirFlake": "subdirFlake",
+        "systems": "systems"
+      }
+    },
+    "subdirFlake": {
+      "locked": {
+        "lastModified": 1792906291,
+        "narHash": "sha256-LzdJmtGZs51K2/Hqw2velP8HRc03g1d/MPAS6Ik2Y2g=",
+        "path": "/home/loner/Templates/fip/tests/subdirFlake",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/loner/Templates/fip/tests/subdirFlake",
+        "type": "path"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1792905576,
+        "narHash": "sha256-r6g9Vyh4HFxvzsLHrrCpF/hc1sHbAZBi442Fx6/iMk4=",
+        "path": "/home/loner/Templates/fip/tests/systems",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/loner/Templates/fip/tests/systems",
+        "type": "path"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
