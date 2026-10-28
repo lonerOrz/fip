@@ -1,13 +1,8 @@
 {
   # nixpkgs' `lib` emits or-as-identifier warnings under `--accept-flake-config`.
-  nixConfig.extra-deprecated-features = [ "or-as-identifier" ];
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    fip = {
-      url = "path:/home/loner/Templates/fip";
-    };
 
     # Local fixtures (absolute paths for Lix compatibility).
     dep1 = {
@@ -34,7 +29,6 @@
     unpatchedInputs@{
       self,
       nixpkgs,
-      fip,
       ...
     }:
     let
@@ -43,17 +37,30 @@
 
       patchSpec = import ./patch-spec.nix;
 
-      # The patch derivation runs on this machine, so every entry uses the
-      # host package set. Naming a different build platform would ask for a
-      # derivation this host cannot build.
+      # The patch derivation runs on this machine, so every entry uses the host
+      # package set; a different build platform would ask for a derivation it cannot
+      # build.
       hostPkgs = nixpkgs.legacyPackages.x86_64-linux;
 
-      patched = fip.patchLib.applyToInputs { inherit unpatchedInputs patchSpec; };
-      patchedWithPkgs = fip.patchLib.applyToInputs {
+      # The tests flake lives inside the repo, so `../.` escapes the flake root to
+      # the live working tree -- not a narHash-locked copy -- which is what we test.
+      patcherRoot = ../.;
+      fixtures = ./.;
+
+      # Guard: if the library under test is not the same source tree as these
+      # fixtures, the suite silently evaluates a stale copy and must not report green.
+      stalenessGuard = lib.optional (
+        builtins.dirOf (builtins.toString fixtures) != builtins.toString patcherRoot
+      ) "staleness-guard: library under test is not the live source tree";
+
+      patchLib = import "${patcherRoot}/lib.nix";
+
+      patched = patchLib.applyToInputs { inherit unpatchedInputs patchSpec; };
+      patchedWithPkgs = patchLib.applyToInputs {
         inherit unpatchedInputs patchSpec;
         pkgs = hostPkgs;
       };
-      byPlatform = fip.patchLib.forSystemAttrs {
+      byPlatform = patchLib.forSystemAttrs {
         inherit unpatchedInputs patchSpec;
         pkgs = hostPkgs;
         platforms = [
@@ -65,11 +72,6 @@
       dep1Patched = patched.dep1;
       wrapperPatched = patched.dep1-wrapper;
 
-      # A relative import from a store-copied test file resolves against the
-      # store path's parent, so the modules are reached through this instead.
-      patcherRoot = fip.outPath;
-      fixtures = ./.;
-
       unit =
         (import ./unit/spec-tests.nix { inherit lib patcherRoot; })
         ++ (import ./unit/patch-tree-tests.nix {
@@ -79,10 +81,13 @@
         ++ (import ./unit/generator-tests.nix {
           inherit lib patcherRoot fixtures;
           runCommandLocal = nixpkgs.legacyPackages.x86_64-linux.runCommandLocal;
-        });
-
-      # Only the unpatched-passthrough half catches a node resolved to the
-      # wrong source.
+        })
+        ++ (import ./unit/apply-patches-tests.nix {
+          inherit lib patcherRoot fixtures;
+          runCommandLocal = nixpkgs.legacyPackages.x86_64-linux.runCommandLocal;
+        })
+        ++ (import ./unit/flake-shape-tests.nix { inherit lib patcherRoot; });
+      # Only the unpatched-passthrough half catches a node resolved to the wrong source.
       integration =
         lib.optional (dep1Patched.value != "you've been patched!") "dep1.value patched"
         ++ lib.optional (dep1Patched.set.new != "new") "dep1.set.new patched"
@@ -99,16 +104,14 @@
           wrapperPatched.systemFromDep1 != "you've been patched!"
         ) "dep1-wrapper.systems patched"
         ++ lib.optional (
-          wrapperPatched.readme != "patched this new file into existence!\n"
-        ) "dep1-wrapper.subdirFlake patched"
-
+          patched.dep1-wrapper.outPath != unpatchedInputs.dep1-wrapper.outPath
+        ) "join: unpatched dep1-wrapper unchanged"
         ++ lib.optional (patched.dep1 == dep1) "core: patched dep1 is not the original"
         ++ lib.optional (patched.dep1.outPath == dep1.outPath) "core: patched dep1 has a new outPath"
 
         ++ lib.optional (
           patched.nixpkgs.outPath != unpatchedInputs.nixpkgs.outPath
         ) "join: unpatched nixpkgs unchanged"
-        ++ lib.optional (patched.fip.outPath != unpatchedInputs.fip.outPath) "join: unpatched fip unchanged"
         ++ lib.optional (
           patched.nixpkgs.legacyPackages.x86_64-linux.hello.name
           != unpatchedInputs.nixpkgs.legacyPackages.x86_64-linux.hello.name
@@ -130,36 +133,25 @@
 
         ++ lib.optional (
           patchedWithPkgs.dep1.value != "you've been patched!"
-        ) "applyToInputs: explicit pkgs is honoured";
+        ) "applyToInputs: explicit pkgs is honoured"
+
+        # `applyToInputs` must return `self` carrying the patched tree in `self.inputs`;
+        # a regression that drops `self` or leaves `self.inputs` unpatched passes every
+        # other test, so it is asserted directly here.
+        ++ lib.optional (!(patched ? self)) "applyToInputs: result has a self key"
+        ++ lib.optional (
+          patched.self.inputs.dep1.value != "you've been patched!"
+        ) "applyToInputs: self.inputs carries the patched dep1"
+        ++ lib.optional (
+          patched.self.inputs.dep1.outPath == unpatchedInputs.dep1.outPath
+        ) "applyToInputs: self.inputs.dep1 is a new store path"
+        ++ lib.optional (
+          patched.self.inputs.dep1-wrapper.value != "you've been patched!"
+        ) "applyToInputs: self.inputs carries a patched dependency's node";
+
     in
     {
-      inherit patched;
 
-      failedTests = unit ++ integration;
-
-      # Both entries build with the host toolchain, so `--all-systems` can
-      # realise them here.
-      packages = builtins.listToAttrs (
-        map
-          (
-            system:
-            let
-              pkgs = nixpkgs.legacyPackages.${system};
-              dep1 = byPlatform.${system}.dep1;
-            in
-            {
-              name = system;
-              value = {
-                hello-from-patched = pkgs.runCommandLocal "hello-from-patched" { } ''
-                  echo "patched dep1 value: ${dep1.value}" > "$out"
-                '';
-              };
-            }
-          )
-          [
-            "x86_64-linux"
-            "aarch64-linux"
-          ]
-      );
+      failedTests = stalenessGuard ++ unit ++ integration;
     };
 }

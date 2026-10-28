@@ -11,12 +11,7 @@ let
   patchTree = import ./patch-tree.nix applyPatches;
 
   patchesByNarHash = resolveSpec unpatchedInputs patchSpec;
-
-  patchedInputs = patchTree patchesByNarHash unpatchedInputs;
 in
-patchedInputs
-// {
-  self = unpatchedInputs.self // {
-    inputs = patchedInputs;
-  };
-}
+# Pure tree transform: returns `unpatchedInputs` with the patched sources swapped
+# in and no `self`. Assembling `self` is the entry point's job, not the engine's.
+patchTree patchesByNarHash unpatchedInputs

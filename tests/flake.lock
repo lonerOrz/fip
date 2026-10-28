@@ -37,18 +37,6 @@
         "type": "path"
       }
     },
-    "fip": {
-      "locked": {
-        "lastModified": 1792945361,
-        "narHash": "sha256-Do5c9XuiDNri4w6d4s1Do3L+9RCvZP9BNsn51bBm2TQ=",
-        "path": "/home/loner/Templates/fip",
-        "type": "path"
-      },
-      "original": {
-        "path": "/home/loner/Templates/fip",
-        "type": "path"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1792773339,
@@ -69,7 +57,6 @@
       "inputs": {
         "dep1": "dep1",
         "dep1-wrapper": "dep1-wrapper",
-        "fip": "fip",
         "nixpkgs": "nixpkgs",
         "subdirFlake": "subdirFlake",
         "systems": "systems"

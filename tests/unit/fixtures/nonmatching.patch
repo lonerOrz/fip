@@ -1,0 +1,5 @@
+--- a/value.nix
++++ b/value.nix
+@@ -1 +1 @@
+-"this context deliberately does not match the real source"
++"you've been patched!"

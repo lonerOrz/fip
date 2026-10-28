@@ -1,19 +1,24 @@
-# Resolves a `patchSpec` into `narHash -> [patches]`.
-#
-# Keyed by source, not by tree position: a node reached through `follows` is the
-# same attrset as the node it follows, so one entry covers every position that
-# source occupies.
+# Resolves a `patchSpec` into `narHash -> [patches]`, keyed by source rather than
+# tree position: a node reached through `follows` is the same attrset, so one
+# entry covers every position it occupies.
 let
-  # Nix lacks these three; `attrNames` is sorted, so order matches nixpkgs'.
+  # `attrNames` is sorted, so iteration order matches nixpkgs' (deterministic).
   foldlAttrs =
     op: init: attrs:
     builtins.foldl' (acc: name: op acc name attrs.${name}) init (builtins.attrNames attrs);
 
   mapAttrsToList = f: attrs: builtins.map (name: f name attrs.${name}) (builtins.attrNames attrs);
-
-  isDerivation = x: builtins.isAttrs x && (x.type or null) == "derivation";
-
   joinLines = builtins.concatStringsSep "\n";
+  # Validation lives in validate-patch.nix and returns problems as data so a test
+  # can inspect them; we throw the first.
+  validatePatches = import ./validate-patch.nix;
+  flakeShape = import ./flake-shape.nix;
+
+  # Patches for a source are a set, not a sequence: the same patches in a
+  # different order are not a conflict.
+  samePatches =
+    xs: ys:
+    (builtins.length xs == builtins.length ys) && (builtins.all (x: builtins.any (y: x == y) ys) xs);
 in
 
 unpatchedInputs: patchSpec:
@@ -23,15 +28,16 @@ let
     acc: m:
     foldlAttrs (
       a: narHash: patches:
-      if a ? ${narHash} && a.${narHash} != patches then
+      if a ? ${narHash} && !(samePatches a.${narHash} patches) then
         throw (joinLines [
           "fip: the same input is patched from two places in the spec"
           ""
           "Source: ${narHash}"
           ""
           "Patches are keyed by source, so listing one under two spec paths"
-          "registers it twice. Keep a single entry -- it already applies"
-          "everywhere that source appears, including through `follows`."
+          "registers it twice. The two entries disagree on which patches to"
+          "apply, so the result is ambiguous. Keep a single entry -- it already"
+          "applies everywhere that source appears, including through `follows`."
         ])
       else if a ? ${narHash} then
         a
@@ -47,9 +53,6 @@ let
       childSpecs = spec.inputs or { };
       childInputs = input.inputs or { };
 
-      # A Flake input exposes `outputs`; a non-Flake source does not.
-      isFlake = builtins.hasAttr "outputs" input;
-
       where = builtins.concatStringsSep "." path;
 
       own =
@@ -62,7 +65,7 @@ let
             "A patch spec describes DEPENDENCIES. To change your own flake,"
             "edit its files -- there is nothing to patch before Nix reads them."
           ])
-        else if !isFlake then
+        else if !flakeShape input then
           throw (joinLines [
             "fip: cannot patch a non-Flake input"
             ""
@@ -83,11 +86,15 @@ let
         else
           { ${narHash} = patches; };
 
-      # A missing local patch file throws here rather than at build time.
-      # Derivations resolve over the network, and a non-path cannot be stat'd.
+      # Validate every patch here, before any subtree is realised, so a bad entry
+      # surfaces immediately with its exact location rather than as a generic Nix
+      # failure at build time. The validator returns its findings as data; we
+      # throw the first.
       localFilesPresent =
-        assert builtins.all (p: isDerivation p || !(builtins.isPath p) || builtins.pathExists p) patches;
-        true;
+        let
+          problems = validatePatches where patches;
+        in
+        if problems == [ ] then true else throw (builtins.elemAt problems 0);
 
       children = mapAttrsToList (
         name: childSpec:

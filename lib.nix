@@ -1,16 +1,16 @@
-# Public API, exposed as `patchLib`. Usage and the spec format are in README.md.
+# Public API, exposed as `patchLib`.
 let
   applyToInputs = import ./module/apply-to-self.nix;
 in
 {
   # Returns `unpatchedInputs` with the patched sources swapped in.
   #
-  # `pkgs` supplies `patch` and coreutils, defaulting to your own `nixpkgs`
-  # input. `buildPlatform` only picks that default; pure eval hides the host's.
+  # `pkgs` supplies `patch` and coreutils; it defaults to your `nixpkgs` input.
+  # `buildPlatform` only chooses that default, since pure eval hides the host.
   inherit applyToInputs;
 
-  # `{ <platform> = <patched>; }`. A patched source is built by the host, so a
-  # flake serving hosts with different build platforms needs one entry each.
+  # `{ <platform> = <patched>; }`. Each entry is built by the host, so a flake
+  # serving hosts with different build platforms needs one entry per platform.
   forSystemAttrs =
     {
       unpatchedInputs,
@@ -28,6 +28,7 @@ in
       }) platforms
     );
 
-  # The engine, for callers wiring the stages themselves.
+  # The engine: a pure tree transform returning only the patched inputs, without
+  # `self`, for callers wiring the stages themselves.
   patch = import ./module/patch-inputs.nix;
 }

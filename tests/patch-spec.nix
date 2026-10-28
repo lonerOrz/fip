@@ -1,14 +1,8 @@
-# Externalized patch spec for the test suite. Read by `applyToSelf` from
-# <flake-root>/patch-spec.nix by convention. This mirrors how a consumer keeps
-# their patch spec in its own file so a lifecycle workflow can add/remove
-# entries without editing `flake.nix`.
-#
-# Written as a function `{ pkgs, ... }:` to prove the "want a param" path works
-# (a `pkgs` alias for the build machine's nixpkgs is injected, so
-# `pkgs.fetchpatch` is available for remote patches). Only local file paths are
-# used here. `systems` and `subdirFlake` are *followed* from `dep1`, so they are
-# patched at the root level (where they are declared directly). `dep1` is
-# patched directly.
+# Externalized patch spec for the test suite, read from `<flake-root>/patch-spec.nix`
+# by convention, mirroring how a consumer keeps its spec in its own file.
+# Written as a function `{ pkgs, ... }:` to prove the injected `pkgs` alias makes
+# `pkgs.fetchpatch` available. `systems` and `subdirFlake` are followed from
+# `dep1`, so they are patched at the root level where they are declared directly.
 { pkgs, ... }:
 
 {

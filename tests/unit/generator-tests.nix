@@ -1,8 +1,6 @@
-# Checks that the patch applier accepts a local patch file and a patch
-# derivation (what `pkgs.fetchpatch` produces), and that the patch lands.
-#
-# Reading the built output forces realisation, so this builds two small
-# derivations and needs no network.
+# Checks that the patch applier accepts a local patch file and a patch derivation
+# (what `pkgs.fetchpatch` produces) and that the patch lands. Reading the built
+# output forces realisation, so this builds two small derivations, no network.
 {
   lib,
   patcherRoot,

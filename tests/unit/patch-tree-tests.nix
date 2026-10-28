@@ -1,7 +1,6 @@
-# Unit tests for `module/patch-tree.nix`: tree + patches -> patched tree
-#
-# Patching `systems` at the root must also patch the copy `dep1` reaches
-# through `follows`. The fixture flakes are imported, so they must exist.
+# Unit tests for `module/patch-tree.nix`: tree + patches -> patched tree.
+# Patching `systems` at the root must also patch the copy `dep1` reaches through
+# `follows`; fixtures are imported, so they must exist.
 {
   lib,
   patcherRoot,
@@ -28,8 +27,8 @@ let
     outputs = { };
   };
 
-  # dep1 declares inputs `systems` and `subdirFlake`; the test flake makes both
-  # of them `follows`, so the SAME attrset appears at two positions.
+  # `dep1` follows `systems` and `subdirFlake`, so the same attrset appears at
+  # two positions.
   systemsNode = flake sysHash "${fixtures}/systems" { };
   subdirNode = flake subHash "${fixtures}/subdirFlake" { };
 
@@ -49,11 +48,44 @@ let
   # Patch the shared source once, at the root position only.
   patched = patchTree { ${sysHash} = [ systemsPatch ]; } tree;
 
+  # A patch whose content cannot be inspected at eval time (a `pkgs.fetchpatch`
+  # result) must still force a re-import, so the .nix file it changes is the one
+  # evaluated. The derivation edits `default.nix`.
+  drvHash = hash "v";
+  systemsDrvNode = flake drvHash "${fixtures}/systems" { };
+  drvPatch = runCommandLocal "simulated-fetchpatch-derivation.patch" { } ''
+    cat > "$out" <<'EOF'
+    --- a/default.nix
+    +++ b/default.nix
+    @@ -1 +1 @@
+    -"x86_64-linux"
+    +"patched-by-derivation"
+    EOF
+  '';
+  treeDrv = tree // {
+    systemsDrv = systemsDrvNode;
+  };
+  patchedDrv = patchTree { ${drvHash} = [ drvPatch ]; } treeDrv;
+
   untouched = patchTree { } tree;
+  # A third position for the shared patched source: a top-level alias of the
+  # same `systems` node under a different attribute name. Memoization by narHash
+  # collapses all three to one derivation.
+  tree3 = tree // {
+    systemsCopy = systemsNode;
+  };
+  patched3 = patchTree { ${sysHash} = [ systemsPatch ]; } tree3;
+  # The single derivation the memo must reuse for every position of `systems`.
+  systemsPatchedOut =
+    (applyPatches {
+      name = "${sysHash}-patched";
+      patches = [ systemsPatch ];
+      src = systemsNode.outPath;
+    }).outPath;
 in
 [ ]
-# `lib.optional COND MSG` emits MSG -- a failure -- when COND is TRUE, so each
-# condition below is the NEGATION of the property being asserted.
+# `lib.optional COND MSG` emits MSG (a failure) when COND is true, so each
+# condition below is the negation of the property being asserted.
 
 ++ lib.optional (untouched.dep1 != tree.dep1) "tree: unpatched node is the identical value"
 ++ lib.optional (untouched.systems != tree.systems) "tree: unpatched leaf is the identical value"
@@ -77,3 +109,26 @@ in
 ++ lib.optional (
   patched.dep1.outPath != tree.dep1.outPath
 ) "tree: a re-imported-but-unpatched parent keeps its own source"
+# A derivation patch whose content cannot be read at eval time still forces a
+# re-import, so the .nix file it edits is the one evaluated.
+++ lib.optional (
+  patchedDrv.systemsDrv.value or null != "patched-by-derivation"
+) "tree: a derivation patch forces re-import of a .nix file"
+# Memoization: `systems` is patched but reached from three positions (root,
+# `dep1.inputs.systems` via follows, and `systemsCopy`). After the rewrite each
+# distinct source is re-imported exactly once, so all three positions share the
+# same patched derivation. Under the old per-position code the `systemsCopy`
+# position carried a different derivation name and outPath, so this guard fails
+# on regression to per-position re-import.
+++ lib.optional (
+  patched3.systems.outPath != patched3.systemsCopy.outPath
+) "memo: systems shared between two top-level positions"
+++ lib.optional (
+  patched3.systems.outPath != patched3.dep1.inputs.systems.outPath
+) "memo: systems shared between root and dep1 positions"
+++ lib.optional (
+  patched3.systemsCopy.outPath != patched3.dep1.inputs.systems.outPath
+) "memo: systems shared between copy and dep1 positions"
+++ lib.optional (
+  patched3.systems.outPath != systemsPatchedOut
+) "memo: systems equals the single memoized patched derivation"

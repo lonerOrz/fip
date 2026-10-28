@@ -1,5 +1,5 @@
-# A function `patchSpec` is called once, with the consumer's inputs plus a
-# `pkgs` alias, so a patch can be `pkgs.fetchpatch`.
+# `patchSpec` may be a function; it is called once with the consumer's inputs
+# plus a `pkgs` alias, so a patch can use `pkgs.fetchpatch`.
 {
   unpatchedInputs,
   patchSpec,
@@ -44,10 +44,18 @@ let
       patchSpec (unpatchedInputs // { pkgs = resolvedPkgs; })
     else
       patchSpec;
+
+  patchedTree = import ./patch-inputs.nix {
+    inherit unpatchedInputs;
+    patchSpec = resolvedSpec;
+    inherit (resolvedPkgs) runCommandLocal;
+  };
 in
-unpatchedInputs
-// (import ./patch-inputs.nix {
-  inherit unpatchedInputs;
-  patchSpec = resolvedSpec;
-  inherit (resolvedPkgs) runCommandLocal;
-})
+# The engine returns the patched tree only; here we add `self` with `inputs`
+# set to that tree, so the consumer's own flake sees the patched dependencies.
+patchedTree
+// {
+  self = unpatchedInputs.self // {
+    inputs = patchedTree;
+  };
+}
