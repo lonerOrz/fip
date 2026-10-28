@@ -40,6 +40,22 @@ in
 - `patchTree` — the same patching, but returns only the patched inputs. Use it if you wire things yourself.
 - `forSystemAttrs` — one patched set per platform, for a flake that serves several machines.
 
+## Benchmarks
+
+Measured on a tiny fixture, so only the ratios matter: cold rebuilds the patched derivation, warm hits the store cache.
+
+Cost is per *source*, not per *patch*: fip builds one derivation per patched source and applies all its patches in a single `patch` run.
+
+The ~500 ms over no-fip is the fixed cost of any derivation: copy source to store, then run `patch`.
+
+It does not grow with patch count, and is paid only once per source.
+
+| Scenario | cold | warm |
+|---|---|---|
+| no fip | 74 ms | 74 ms |
+| fip, empty `patchSpec` | 91 ms | 91 ms |
+| fip, 1 source + 1 patch | 554 ms | 525 ms |
+| fip, 4 sources + 1 patch each | 834 ms | 533 ms |
 ## Development
 
 ```sh
