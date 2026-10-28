@@ -1,8 +1,5 @@
-# Externalized patch spec for the test suite, read from `<flake-root>/patch-spec.nix`
-# by convention, mirroring how a consumer keeps its spec in its own file.
-# Written as a function `{ pkgs, ... }:` to prove the injected `pkgs` alias makes
-# `pkgs.fetchpatch` available. `systems` and `subdirFlake` are followed from
-# `dep1`, so they are patched at the root level where they are declared directly.
+# Test spec in its own file, as a consumer would keep one. A function, to prove
+# the injected `pkgs` alias reaches `pkgs.fetchpatch`.
 { pkgs, ... }:
 
 {

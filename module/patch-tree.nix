@@ -1,11 +1,6 @@
-# Rebuilds the tree, swapping in every patched source. `inputs` is the resolved
-# graph already, so no lockfile is read. `applyPatches` is injected: this module
-# knows a source changed, not how.
-#
-# Memoization: one source appears at several positions (a `follows` target or
-# under several attribute names) but is the same attrset. Keyed by `narHash`,
-# not position, each distinct source is computed once and substituted into every
-# position, collapsing N positions to one re-import and derivation build.
+# Rebuilds the tree, swapping in every patched source. `applyPatches` is injected.
+# Sources are memoised by narHash, so a `follows` target at N positions is built
+# and re-imported once.
 applyPatches:
 
 # narHash -> [patches], as produced by spec.nix.
@@ -18,16 +13,13 @@ let
 
   roots = builtins.removeAttrs unpatchedInputs [ "self" ];
 
-  # Gather distinct sources depth-first, recording each one's depth. A child is
-  # always deeper than its parent, so folding in ascending-depth order computes
-  # every child before its parent. That ordering is what lets `compute` read a
-  # child from `byHash` without forcing a cycle: the attrset is fully populated
-  # with thunks before any value is forced.
+  # Gather distinct sources with their depth. Children are always deeper, so
+  # ascending-depth order computes each child before its parent: no cycle.
   gather =
     depth: input: acc:
     let
       narHash = input.narHash or null;
-      # Any representative works: the memo is keyed by source, not by position.
+      # Any representative works; keep the shallowest.
       acc' =
         if narHash == null then
           acc
@@ -64,20 +56,15 @@ let
       childValues = builtins.mapAttrs (
         _: child: if child.narHash or null != null then byHash.${child.narHash}.result else child
       ) (input.inputs or { });
-      # A narHash-less child is never own-patched (spec.nix rejects null-narHash
-      # patching), so it can only be a re-imported ancestor. Recompute it per
-      # position rather than memoize, because `patchesByNarHash` cannot key on it.
+      # No narHash: never own-patched, so recompute per position.
       childHasHash = c: c.narHash or null != null;
       anyChildPatched = builtins.any (c: childHasHash c && byHash.${c.narHash}.patched) (
         builtins.attrValues (input.inputs or { })
       );
       patched = ownPatches != [ ] || anyChildPatched;
 
-      # Named by narHash, not position, so every position of this source shares
-      # one derivation and Nix builds it once.
+      # Named by narHash so every position shares one derivation.
       ownPatched = ownPatches != [ ];
-      # Null when this source has no own patches; it is then kept at its original
-      # outPath and only re-imported because a descendant changed.
       patchedDerivation =
         if ownPatched then
           applyPatches {
@@ -87,8 +74,7 @@ let
           }
         else
           null;
-      # Forced to the patched store path, not the derivation thunk, so a
-      # memoized node's `outPath` compares and stringifies as a path.
+      # The store path, not the derivation: `outPath` must compare as a path.
       srcPath = if ownPatched then patchedDerivation.outPath else input.outPath;
       result =
         if !patched then
@@ -106,28 +92,38 @@ let
             ]
           )
         else
+          # Genuine IFD when patched: the flake.nix must be read from the
+          # patched directory.
           let
-            # Import-From-Derivation: when this node has its own patches,
-            # `realSrc` is the outPath of a derivation built by apply-patches, so
-            # importing its flake.nix is genuine IFD. This is required, not
-            # incidental: a flake.nix that reads files the patch modifies must be
-            # evaluated from the patched directory. Do not run Nix with
-            # `--option allow-import-from-derivation false` on a flake that uses
-            # fip.
             realSrc = if ownPatched then srcPath else input.outPath;
             flake = import (realSrc + "/flake.nix");
-            # `self` is this node itself, so a flake's outputs can reference it
-            # through `self.inputs.<child>`.
-            self = outputs // {
-              outPath = srcPath;
-              inputs = childValues;
-              # The hash still describes the base source; only outPath changes.
-              sourceInfo = (input.sourceInfo or { }) // {
+            # Rebuild from `input` so original attributes survive; `sourceInfo`
+            # is only added where it changes.
+            sourceInfo' =
+              let
+                base = input.sourceInfo or { };
+              in
+              if ownPatched then
+                base
+                // {
+                  outPath = srcPath;
+                  baseNarHash = input.narHash or null;
+                  fipPatches = ownPatches;
+                }
+              else
+                base;
+            # Only surface `sourceInfo` when it carries something.
+            selfExtra = if sourceInfo' == { } then { } else { sourceInfo = sourceInfo'; };
+            flakeOutputs = flake.outputs (childValues // { inherit self; });
+            self =
+              input
+              // flakeOutputs
+              // {
                 outPath = srcPath;
-              };
-              _type = "flake";
-            };
-            outputs = flake.outputs (childValues // { inherit self; });
+                inputs = childValues;
+                _type = "flake";
+              }
+              // selfExtra;
           in
           self;
     in
@@ -135,8 +131,7 @@ let
       inherit patched result;
     };
 
-  # One entry per distinct source, in dependency order (children first), so
-  # `compute` reads each child from `byHash` before forcing its own result.
+  # One entry per source, children first, so `compute` never forces a cycle.
   byHash = builtins.listToAttrs (
     builtins.map (narHash: {
       name = narHash;
@@ -144,9 +139,8 @@ let
     }) sortedHashes
   );
 
-  # Walk the original tree and swap each memoized source for its computed result.
-  # A memoized result already carries its substituted children, so those
-  # positions are not re-walked.
+  # Swap each memoised source for its result; re-walk only nodes without a
+  # narHash.
   substitute =
     _: input:
     let
@@ -155,8 +149,6 @@ let
     if narHash != null && byHash ? ${narHash} then
       byHash.${narHash}.result
     else
-      # No narHash: keep this node, but substitute its children so a patched
-      # descendant is still swapped in.
       input
       // {
         inputs = builtins.mapAttrs substitute (input.inputs or { });
@@ -164,5 +156,4 @@ let
 
   hasPatches = builtins.foldl' (acc: v: acc || v != [ ]) false (builtins.attrValues patchesByNarHash);
 in
-# Rebuild when any patches exist; short-circuit to the original tree otherwise.
 if !hasPatches then roots else builtins.mapAttrs substitute roots

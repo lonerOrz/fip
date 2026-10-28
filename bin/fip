@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# fip — patch flake inputs without IFD.
+#
+# Usage:
+#   fip generate --inputs <path-to-consumer-flake> --spec <path-to-patchSpec.nix> --out <dir>
+#
+# shellcheck disable=SC2155,SC2086,SC2206
+set -euo pipefail
+
+PROG="$(basename "$0")"
+NIX="${NIX:-nix}"
+JQ="${JQ:-jq}"
+
+usage() {
+  cat >&2 <<EOF
+usage: $PROG generate --inputs <consumer-flake> --spec <patchSpec.nix> --out <dir>
+
+  --inputs <dir>   path to the consumer flake (read its static \`inputs\` map)
+  --spec <file>    path to a patch spec (.nix): an attrset or a function
+  --out <dir>      output directory; receives flake.nix, flake.lock and fip-audit.json
+  -h, --help       show this help
+EOF
+}
+
+die() { echo "$PROG: $*" >&2; exit 1; }
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift || true
+
+case "$cmd" in
+  generate) ;;
+  -h|--help|"") usage; exit 0 ;;
+  *) die "unknown subcommand: $cmd (try 'generate')" ;;
+esac
+
+INPUTS=""; SPEC=""; OUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --inputs) INPUTS="${2:-}"; shift 2 || die "--inputs needs an argument" ;;
+    --spec)   SPEC="${2:-}";   shift 2 || die "--spec needs an argument" ;;
+    --out)    OUT="${2:-}";    shift 2 || die "--out needs an argument" ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown flag: $1" ;;
+  esac
+done
+
+[ -n "$INPUTS" ] || die "--inputs is required"
+[ -n "$SPEC" ]   || die "--spec is required"
+[ -n "$OUT" ]    || die "--out is required"
+[ -d "$INPUTS" ] || die "--inputs '$INPUTS' is not a directory"
+[ -f "$SPEC" ]   || die "--spec '$SPEC' is not a file"
+command -v "$JQ" >/dev/null 2>&1 || die "jq is required (set JQ=/path/to/jq)"
+
+# Resolve to absolute paths so the generated flake can import them verbatim.
+INPUTS="$(cd "$INPUTS" && pwd)"
+SPEC="$(cd "$(dirname "$SPEC")" && pwd)/$(basename "$SPEC")"
+OUT="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
+
+CONSUMER_FLAKE_NIX="$INPUTS/flake.nix"
+[ -f "$CONSUMER_FLAKE_NIX" ] || die "no flake.nix found in --inputs '$INPUTS'"
+
+FIP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# A throwaway generator flake: the consumer's inputs, and `outputs` runs the
+# Pre-eval generator. The consumer's own `outputs` never run.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# `inputs` must be a literal set, so the consumer's input map is read as JSON and
+# re-emitted as Nix source.
+"$NIX" eval --impure --json --expr "(import ${CONSUMER_FLAKE_NIX}).inputs" \
+  | "$JQ" '. + {fipNixpkgs: {url: "github:NixOS/nixpkgs/nixos-unstable"}}' \
+  > "$TMP/inputs.json"
+
+CONSUMER_INPUTS_NIX="$("$JQ" -r '
+def nix:
+  if type == "object" then
+    if length == 0 then "{ }"
+    else "{" + (to_entries | map("\(.key) = " + (.value | nix)) | join("; ")) + "; }"
+    end
+  elif type == "array" then
+    "[" + (map(nix) | join(", ")) + "]"
+  elif type == "string" then
+    "\"" + . + "\""
+  elif type == "number" or type == "boolean" then
+    tostring
+  else "null" end;
+nix' "$TMP/inputs.json")"
+
+cat > "$TMP/flake.nix" <<EOF
+{
+  # The consumer's inputs plus the generator's toolchain.
+  inputs = ${CONSUMER_INPUTS_NIX};
+
+  outputs = { self, fipNixpkgs, ... }@inputs:
+    let
+      pkgs = fipNixpkgs.legacyPackages.x86_64-linux;
+      generate = import ${FIP_ROOT}/generate.nix;
+      # A function spec is called with the inputs plus a `pkgs` alias.
+      rawSpec = import ${SPEC};
+      patchSpec = if builtins.isFunction rawSpec
+                  then rawSpec (inputs // { pkgs = pkgs; })
+                  else rawSpec;
+      # Strip our own bookkeeping inputs before generating.
+      unpatchedInputs = builtins.removeAttrs inputs [ "fipNixpkgs" ];
+      result = generate {
+        inherit unpatchedInputs patchSpec;
+        runCommandLocal = pkgs.runCommandLocal;
+      };
+    in
+    {
+      # The exact flake.nix string the consumer should use.
+      wrapperNix = result.wrapperNix;
+      # Auditable per-patched-input metadata (serialised as JSON by nix eval).
+      audit = result.audit;
+    };
+}
+EOF
+
+echo "$PROG: generating wrapper for '$INPUTS' ..." >&2
+# `--impure`: the generator imports generate.nix by absolute path.
+WRAPPER_NIX="$("$NIX" eval --impure --accept-flake-config --raw "$TMP#wrapperNix")"
+AUDIT_JSON="$("$NIX" eval --impure --accept-flake-config --json "$TMP#audit")"
+
+printf '%s\n' "$WRAPPER_NIX" > "$OUT/flake.nix"
+printf '%s\n' "$AUDIT_JSON" > "$OUT/fip-audit.json"
+
+echo "$PROG: locking wrapper flake ..." >&2
+"$NIX" flake lock --accept-flake-config "$OUT" >&2
+
+echo "$PROG: wrote $OUT/flake.nix, $OUT/flake.lock, $OUT/fip-audit.json" >&2
+echo "$PROG: the consumer can now build with:" >&2
+echo "        nix build --option allow-import-from-derivation false '$OUT'" >&2

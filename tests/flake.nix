@@ -35,28 +35,25 @@
       lib = nixpkgs.lib;
       inherit (unpatchedInputs) dep1;
 
-      patchSpec = import ./patch-spec.nix;
+      # A path spec: fip imports it and calls the exported function.
+      patchSpec = ./patch-spec.nix;
 
-      # The patch derivation runs on this machine, so every entry uses the host
-      # package set; a different build platform would ask for a derivation it cannot
-      # build.
+      # Patches build on this host, so every entry uses the host package set.
       hostPkgs = nixpkgs.legacyPackages.x86_64-linux;
 
-      # The tests flake lives inside the repo, so `../.` escapes the flake root to
-      # the live working tree -- not a narHash-locked copy -- which is what we test.
+      # `../.` is the live working tree, not a narHash-locked copy.
       patcherRoot = ../.;
       fixtures = ./.;
 
-      # Guard: if the library under test is not the same source tree as these
-      # fixtures, the suite silently evaluates a stale copy and must not report green.
+      # Fail loudly if the library under test is not this source tree.
       stalenessGuard = lib.optional (
         builtins.dirOf (builtins.toString fixtures) != builtins.toString patcherRoot
       ) "staleness-guard: library under test is not the live source tree";
 
       patchLib = import "${patcherRoot}/lib.nix";
 
-      patched = patchLib.applyToInputs { inherit unpatchedInputs patchSpec; };
-      patchedWithPkgs = patchLib.applyToInputs {
+      patched = patchLib.patchInputs { inherit unpatchedInputs patchSpec; };
+      patchedWithPkgs = patchLib.patchInputs {
         inherit unpatchedInputs patchSpec;
         pkgs = hostPkgs;
       };
@@ -72,14 +69,20 @@
       dep1Patched = patched.dep1;
       wrapperPatched = patched.dep1-wrapper;
 
+      # An empty spec must be a true no-op at the consumer boundary.
+      emptyPatched = patchLib.patchInputs {
+        inherit unpatchedInputs;
+        patchSpec = { };
+      };
       unit =
         (import ./unit/spec-tests.nix { inherit lib patcherRoot; })
         ++ (import ./unit/patch-tree-tests.nix {
           inherit lib patcherRoot fixtures;
           runCommandLocal = nixpkgs.legacyPackages.x86_64-linux.runCommandLocal;
         })
-        ++ (import ./unit/generator-tests.nix {
+        ++ (import ./unit/generate-wrapper-tests.nix {
           inherit lib patcherRoot fixtures;
+          nixpkgs = nixpkgs.legacyPackages.x86_64-linux;
           runCommandLocal = nixpkgs.legacyPackages.x86_64-linux.runCommandLocal;
         })
         ++ (import ./unit/apply-patches-tests.nix {
@@ -133,21 +136,27 @@
 
         ++ lib.optional (
           patchedWithPkgs.dep1.value != "you've been patched!"
-        ) "applyToInputs: explicit pkgs is honoured"
+        ) "patchInputs: explicit pkgs is honoured"
 
-        # `applyToInputs` must return `self` carrying the patched tree in `self.inputs`;
-        # a regression that drops `self` or leaves `self.inputs` unpatched passes every
-        # other test, so it is asserted directly here.
-        ++ lib.optional (!(patched ? self)) "applyToInputs: result has a self key"
+        # `self.inputs` must carry the patched tree; every other test would pass.
+        ++ lib.optional (!(patched ? self)) "patchInputs: result has a self key"
         ++ lib.optional (
           patched.self.inputs.dep1.value != "you've been patched!"
-        ) "applyToInputs: self.inputs carries the patched dep1"
+        ) "patchInputs: self.inputs carries the patched dep1"
         ++ lib.optional (
           patched.self.inputs.dep1.outPath == unpatchedInputs.dep1.outPath
-        ) "applyToInputs: self.inputs.dep1 is a new store path"
+        ) "patchInputs: self.inputs.dep1 is a new store path"
         ++ lib.optional (
           patched.self.inputs.dep1-wrapper.value != "you've been patched!"
-        ) "applyToInputs: self.inputs carries a patched dependency's node";
+        ) "patchInputs: self.inputs carries a patched dependency's node"
+        # Empty spec: the resolved value and the indirect access must match the
+        # bare input.
+        ++ lib.optional (
+          emptyPatched.dep1.value != unpatchedInputs.dep1.value
+        ) "empty-patchSpec: dep1.value matches bare input"
+        ++ lib.optional (
+          emptyPatched.dep1.indirectAccessSystem != unpatchedInputs.dep1.indirectAccessSystem
+        ) "empty-patchSpec: dep1 indirect access matches bare input";
 
     in
     {

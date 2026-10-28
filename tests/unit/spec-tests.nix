@@ -1,14 +1,11 @@
-# Unit tests for `module/spec.nix`: tree + spec -> narHash -> [patches].
-# Pure: no fetches, IFD, or network.
+# Unit tests for `spec.nix`: tree + spec -> narHash -> [patches].
 { lib, patcherRoot }:
 
 let
   resolveSpec = import "${patcherRoot}/module/spec.nix";
   validatePatch = import "${patcherRoot}/module/validate-patch.nix";
 
-  # A derivation-shaped value standing in for a `pkgs.fetchpatch` result; the
-  # validator accepts derivations without touching disk. Names are distinct so
-  # two patches are genuinely different values (needed for the conflict test).
+  # A derivation-shaped `pkgs.fetchpatch` result; distinct names so values differ.
   fetch = name: {
     _type = "derivation";
     type = "derivation";
@@ -21,8 +18,7 @@ let
   p2 = fetch "p2";
   p3 = fetch "p3";
 
-  # Real files on disk (under tests/unit/fixtures/) so the validator's
-  # path-existence branch runs on a usable path, not just derivations.
+  # Real files so the validator's existence branch runs on a usable path.
   p1Path = ./fixtures/p1.patch;
 
   # A path that does not exist on disk, for the missing-file test.
@@ -61,16 +57,36 @@ let
     alias = tree.dep.inputs.sub;
   };
 
-  tryResolve = inputs: spec: builtins.tryEval (builtins.deepSeq (resolveSpec inputs spec) true);
+  resolve =
+    inputs: spec:
+    resolveSpec {
+      unpatchedInputs = inputs;
+      patchSpec = spec;
+    };
+  tryResolve = inputs: spec: builtins.tryEval (builtins.deepSeq (resolve inputs spec) true);
 
   throws = inputs: spec: !(tryResolve inputs spec).success;
 
-  got = resolveSpec tree {
+  got = resolve tree {
     dep.patches = [ p1 ];
     dep.inputs.sub.patches = [ p2 ];
   };
 
-  aliased = resolveSpec treeWithAlias {
+  # `./p1.patch` in the fixture is the same path as `p1Path`.
+  fromFile = resolve tree ./fixtures/spec-as-file.nix;
+  fileEquivalent = resolve tree { dep.patches = [ p1Path ]; };
+  fromFunctionFileThrows = throws tree ./fixtures/spec-as-function.nix;
+  # A string is not carried into the store, so it is rejected.
+  stringSpecThrows = throws tree "./fixtures/spec-as-file.nix";
+  # The call lives in `resolveSpec`, so every entry point shares it.
+  fromFunctionFile = resolveSpec {
+    unpatchedInputs = tree;
+    patchSpec = ./fixtures/spec-as-function.nix;
+    pkgs = { };
+  };
+  fromFunctionFileEquivalent = resolve tree { dep.patches = [ p1Path ]; };
+
+  aliased = resolve treeWithAlias {
     dep.inputs.sub.patches = [ p2 ];
     alias.patches = [ p2 ];
   };
@@ -80,8 +96,7 @@ let
     alias.patches = [ p3 ];
   };
 
-  # The same source patched from two positions with the same patches in a
-  # different order must not error: order is not significant.
+  # Order is not significant.
   aliasedReorderedOk =
     !(throws treeWithAlias {
       dep.inputs.sub.patches = [
@@ -94,8 +109,7 @@ let
       ];
     });
 
-  # The validator's output, asserted as real data: each entry is the exact
-  # problem string, so the test checks the wording rather than a thrown message.
+  # Asserted as data: the exact problem strings, not a thrown message.
   problemsMissing = validatePatch "dep" [ missingPath ];
   problemsNumber = validatePatch "dep" [ 42 ];
   problemsString = validatePatch "dep" [ "just-a-string" ];
@@ -114,17 +128,25 @@ in
 ++ lib.optional ((got.${a} or [ ]) != [ p1 ]) "spec: direct patches recorded"
 ++ lib.optional ((got.${b} or [ ]) != [ p2 ]) "spec: transitive patches recorded"
 
+# A spec path is imported and resolves exactly like the equivalent attrset.
+++ lib.optional (
+  fromFile != fileEquivalent
+) "spec: a path spec is imported and resolves identically"
+++ lib.optional (!fromFunctionFileThrows) "spec: a function spec file makes resolveSpec throw"
+++ lib.optional (!stringSpecThrows) "spec: a string spec is rejected, not walked as an attrset"
+++ lib.optional (
+  fromFunctionFile != fromFunctionFileEquivalent
+) "spec: a function spec resolves when given a package set"
+
 ++ lib.optional (
   (aliased.${b} or [ ]) != [ p2 ]
 ) "spec: identical patches from two positions dedupe"
 ++ lib.optional (!aliasedConflict) "spec: conflicting patches from two positions must error"
 
-# The same source patched from two positions with the same patches in a
-# different order must not be treated as a conflict.
+# Order is not a conflict.
 ++ lib.optional (!aliasedReorderedOk) "spec: same patches in different order are not a conflict"
 
-# A missing local patch file must be rejected and the problem string must name
-# the file. Asserted on the validator's returned data, not a thrown message.
+# The problem must name the missing file.
 ++ lib.optional (
   problemsMissing == [ ] || !(problemsContain "does-not-exist.patch" problemsMissing)
 ) "spec: missing patch file is reported and names the file"
@@ -132,8 +154,7 @@ in
   !(problemsContain "At: dep" problemsMissing)
 ) "spec: missing patch file problem names the spec location"
 
-# A patch that is neither a path nor a derivation must be rejected, and the
-# problem string must name the bad value's type.
+# The problem must name the bad value's type.
 ++ lib.optional (
   problemsNumber == [ ] || !(problemsContain "Got: int" problemsNumber)
 ) "spec: a non-path non-derivation patch is reported and names its type"
@@ -149,8 +170,7 @@ in
   problemsClean != [ ]
 ) "spec: a derivation and an existing path are accepted (no problems)"
 
-# resolveSpec must throw on a bad patch (the validator's problems are surfaced
-# as an error) while accepting good patches.
+# A bad patch throws; a good one does not.
 ++ lib.optional (
   !(throws tree { dep.patches = [ missingPath ]; })
 ) "spec: a missing local patch file makes resolveSpec throw"

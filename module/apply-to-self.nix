@@ -1,5 +1,4 @@
-# `patchSpec` may be a function; it is called once with the consumer's inputs
-# plus a `pkgs` alias, so a patch can use `pkgs.fetchpatch`.
+# In-eval: the patched inputs with `self.inputs` set to them.
 {
   unpatchedInputs,
   patchSpec,
@@ -31,28 +30,21 @@ let
           ""
           "  unpatchedInputs.nixpkgs.legacyPackages.${defaultPlatform}"
           ""
-          "but the `unpatchedInputs` passed to `applyToInputs` has no `nixpkgs`."
+          "but the `unpatchedInputs` passed to `patchInputs` has no `nixpkgs`."
           ""
           "Add a `nixpkgs` input, or pass a package set explicitly:"
           ""
-          "  applyToInputs { inherit unpatchedInputs patchSpec; pkgs = <package set>; }"
+          "  patchInputs { inherit unpatchedInputs patchSpec; pkgs = <package set>; }"
         ]
       );
 
-  resolvedSpec =
-    if builtins.isFunction patchSpec then
-      patchSpec (unpatchedInputs // { pkgs = resolvedPkgs; })
-    else
-      patchSpec;
-
   patchedTree = import ./patch-inputs.nix {
-    inherit unpatchedInputs;
-    patchSpec = resolvedSpec;
+    inherit unpatchedInputs patchSpec;
+    # `resolveSpec` calls a function spec with this as `pkgs`.
+    pkgs = resolvedPkgs;
     inherit (resolvedPkgs) runCommandLocal;
   };
 in
-# The engine returns the patched tree only; here we add `self` with `inputs`
-# set to that tree, so the consumer's own flake sees the patched dependencies.
 patchedTree
 // {
   self = unpatchedInputs.self // {

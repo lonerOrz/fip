@@ -1,6 +1,4 @@
-# Unit tests for the shared "is this a Flake input?" predicate.
-# `spec.nix` and `patch-tree.nix` both gate on `outputs`; this shared definition
-# keeps the two decisions from disagreeing. Pure: no fetches, no IFD.
+# Unit tests for the shared Flake predicate.
 { lib, patcherRoot }:
 
 let
@@ -21,8 +19,7 @@ let
     outPath = "/nix/store/bare-source";
   };
 
-  # An input with `outputs` present but empty is still a Flake, because the
-  # attribute is present; `hasAttr` does not care about the value.
+  # `outputs` present but empty is still a Flake: `hasAttr` ignores the value.
   emptyOutputs = {
     _type = "flake";
     narHash = "sha256-...";
