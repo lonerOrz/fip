@@ -1,29 +1,70 @@
-# Resolves a `patchSpec` into `narHash -> [patches]`, keyed by source rather than
-# tree position: a node reached through `follows` is the same attrset, so one
-# entry covers every position it occupies.
+# Resolves a `patchSpec` into `narHash -> [patches]`. Keyed by source, so one
+# entry covers every position a `follows` target occupies.
 let
-  # `attrNames` is sorted, so iteration order matches nixpkgs' (deterministic).
   foldlAttrs =
     op: init: attrs:
     builtins.foldl' (acc: name: op acc name attrs.${name}) init (builtins.attrNames attrs);
 
   mapAttrsToList = f: attrs: builtins.map (name: f name attrs.${name}) (builtins.attrNames attrs);
   joinLines = builtins.concatStringsSep "\n";
-  # Validation lives in validate-patch.nix and returns problems as data so a test
-  # can inspect them; we throw the first.
+  # Validation returns problems as data; throw the first.
   validatePatches = import ./validate-patch.nix;
   flakeShape = import ./flake-shape.nix;
 
-  # Patches for a source are a set, not a sequence: the same patches in a
-  # different order are not a conflict.
+  # Patches are a set, not a sequence: order is not a conflict.
   samePatches =
     xs: ys:
     (builtins.length xs == builtins.length ys) && (builtins.all (x: builtins.any (y: x == y) ys) xs);
 in
 
-unpatchedInputs: patchSpec:
+{
+  unpatchedInputs,
+  patchSpec,
+  # Only a function spec uses this: it is passed to the function as `pkgs`.
+  pkgs ? null,
+}:
 
 let
+  # A path literal is imported. A string is rejected: it is not carried into the
+  # flake's store copy and would resolve against the cwd.
+  spec =
+    if builtins.isPath patchSpec then
+      import patchSpec
+    else if builtins.isString patchSpec then
+      throw (joinLines [
+        "fip: patchSpec is a string, not a path"
+        ""
+        "Got: \"${patchSpec}\""
+        ""
+        "Only a path literal (`./patch-spec.nix`) is imported. A string is not"
+        "part of the flake's source tree, so it may be absent or stale when the"
+        "flake is evaluated from its store copy."
+        ""
+        "Write the spec as a path literal, or pass the attrset/function itself."
+      ])
+    else
+      patchSpec;
+
+  # A function spec is called with the inputs plus `pkgs`; without a package set
+  # there is nothing to call it with.
+  specTree =
+    if !(builtins.isFunction spec) then
+      spec
+    else if pkgs == null then
+      throw (joinLines [
+        "fip: this patch spec is a function"
+        ""
+        "A function spec is called with your inputs plus a `pkgs` alias, so it"
+        "needs a package set. `patchInputs` resolves one from your `nixpkgs`"
+        "input; `generateWrapper` and `patchTree` accept one explicitly:"
+        ""
+        "  generateWrapper { inherit unpatchedInputs patchSpec pkgs; }"
+        ""
+        "Or pass the resolved attrset instead of a function."
+      ])
+    else
+      spec (unpatchedInputs // { pkgs = pkgs; });
+
   merge =
     acc: m:
     foldlAttrs (
@@ -81,15 +122,12 @@ let
             ""
             "Patches are keyed by the input's source hash, and this input did"
             "not provide one. This usually means the `inputs` argument passed"
-            "to `applyToInputs` was not the one Nix handed to `outputs`."
+            "to `patchInputs` was not the one Nix handed to `outputs`."
           ])
         else
           { ${narHash} = patches; };
 
-      # Validate every patch here, before any subtree is realised, so a bad entry
-      # surfaces immediately with its exact location rather than as a generic Nix
-      # failure at build time. The validator returns its findings as data; we
-      # throw the first.
+      # Validate before realising anything, so a bad entry names its location.
       localFilesPresent =
         let
           problems = validatePatches where patches;
@@ -116,11 +154,11 @@ let
       result = builtins.seq localFilesPresent (builtins.foldl' merge own children);
     };
 
-  # Stand-in for the consumer's flake. It has `outputs` so it is not mistaken
-  # for a non-Flake source, and no narHash so patching it is rejected above.
+  # Stand-in for the consumer's flake: `outputs` so it reads as a Flake, no
+  # narHash so patching it is rejected.
   walked = walk [ ] {
     outputs = { };
     inputs = builtins.removeAttrs unpatchedInputs [ "self" ];
-  } { inputs = patchSpec; };
+  } { inputs = specTree; };
 in
 walked.result

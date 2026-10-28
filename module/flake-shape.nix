@@ -1,5 +1,2 @@
-# Shared by spec.nix and patch-tree.nix, which both gate on whether an input is
-# a Flake. If they read `outputs` differently, one admits a tree the other
-# refuses, a late and confusing error. The shared predicate keeps the two gates
-# in lockstep.
+# Shared so spec.nix and patch-tree.nix gate on the same predicate.
 input: builtins.hasAttr "outputs" input

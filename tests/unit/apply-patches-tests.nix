@@ -1,12 +1,5 @@
-# Happy-path behaviour: a patch whose context matches must land, and the realised
-# output must contain the patched value (asserted on its output, not source text).
-#
-# The fail-fast property -- a patch that does not apply must fail the build and
-# name the culprit -- is asserted by the `apply-patches-fail-fast` derivation
-# below. The builder (`builder`) is exported, so the test runs the exact script
-# the library uses, not a copy, and observes its exit status and stderr. The
-# exported builder is self-contained: it applies exactly the patches it is given
-# and ignores any ambient `$patches`, which `apply-patches-no-ambient` asserts.
+# A matching patch must land (asserted on the built output, not source text); a
+# non-matching one must fail the build and name the culprit.
 {
   lib,
   patcherRoot,
@@ -24,14 +17,9 @@ let
     patches = [ "${fixtures}/dep1-int-to-str.patch" ];
     src = "${fixtures}/dep1";
   };
-  # A patch that exists but whose context does not match `value.nix`: `patch`
-  # exits non-zero, so the builder must fail the build and name the culprit. The
-  # exported builder runs directly against a scratch $out so we observe the real
-  # exit status and stderr; building this derivation is the assertion.
+  # A non-matching patch must fail the build and name the culprit.
   nonmatchingPatch = "${fixtures}/unit/fixtures/nonmatching.patch";
-  # The builder interpolates the patch list it is given, so the argument is the
-  # only source of truth: no ambient `patches` env var to keep in sync. The exact
-  # exported script runs unmodified against a scratch $out.
+  # The argument is the only source of truth: no ambient `patches` to sync.
   failFast = runCommandLocal "apply-patches-fail-fast" { } ''
     work=$(mktemp -d)
     out_real="$out"
@@ -48,10 +36,8 @@ let
     }
     echo ok > "$out_real"
   '';
-  # Self-consistency: the builder applies exactly the patches it is given and is
-  # blind to any ambient `$patches`. Here we pass an empty list while exporting a
-  # `$patches` that points at the nonmatching patch; a successful build proves the
-  # builder is self-contained.
+  # Empty argument with `$patches` set: a successful build proves it is
+  # self-contained.
   noAmbient = runCommandLocal "apply-patches-no-ambient" { } ''
     work=$(mktemp -d)
     out_real="$out"
@@ -66,18 +52,15 @@ let
   '';
 in
 [ ]
-# `lib.optional COND MSG` emits MSG (a failure) when COND is true, so each
-# condition below is the negation of the property being asserted.
+# Each condition below is the negation of the property asserted.
 ++ lib.optional (
   !(lib.hasInfix "you've been patched!" (builtins.readFile (fromFile + "/value.nix")))
 ) "apply-patches: a matching patch is applied"
-# Building `failFast` proves the nonmatching patch both fails the build and is
-# named; if either property is missing the derivation fails to build.
+# Building it proves both properties; either one missing fails the build.
 ++ lib.optional (
   !(builtins.pathExists failFast)
 ) "apply-patches: a nonmatching patch fails the build"
-# Building `noAmbient` proves the builder is self-contained: with an empty
-# argument it applies nothing even when `$patches` is set in the environment.
+# Proves the builder ignores an ambient `$patches`.
 ++ lib.optional (
   !(builtins.pathExists noAmbient)
 ) "apply-patches: builder is self-contained (ignores ambient \$patches)"

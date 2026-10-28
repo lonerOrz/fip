@@ -2,16 +2,16 @@
 {
   unpatchedInputs,
   patchSpec,
-  # Injected: this module does not know where the tools come from.
   runCommandLocal,
+  # Only a function spec uses this.
+  pkgs ? null,
 }:
 let
   resolveSpec = import ./spec.nix;
   applyPatches = import ./apply-patches.nix { inherit runCommandLocal; };
   patchTree = import ./patch-tree.nix applyPatches;
 
-  patchesByNarHash = resolveSpec unpatchedInputs patchSpec;
+  patchesByNarHash = resolveSpec { inherit unpatchedInputs patchSpec pkgs; };
 in
-# Pure tree transform: returns `unpatchedInputs` with the patched sources swapped
-# in and no `self`. Assembling `self` is the entry point's job, not the engine's.
+# Returns the patched inputs without `self`; the entry point adds it.
 patchTree patchesByNarHash unpatchedInputs

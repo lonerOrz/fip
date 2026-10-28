@@ -1,6 +1,4 @@
-# Unit tests for `module/patch-tree.nix`: tree + patches -> patched tree.
-# Patching `systems` at the root must also patch the copy `dep1` reaches through
-# `follows`; fixtures are imported, so they must exist.
+# Unit tests for `patch-tree.nix`: tree + patches -> patched tree.
 {
   lib,
   patcherRoot,
@@ -27,8 +25,7 @@ let
     outputs = { };
   };
 
-  # `dep1` follows `systems` and `subdirFlake`, so the same attrset appears at
-  # two positions.
+  # The same attrset appears at two positions.
   systemsNode = flake sysHash "${fixtures}/systems" { };
   subdirNode = flake subHash "${fixtures}/subdirFlake" { };
 
@@ -48,9 +45,7 @@ let
   # Patch the shared source once, at the root position only.
   patched = patchTree { ${sysHash} = [ systemsPatch ]; } tree;
 
-  # A patch whose content cannot be inspected at eval time (a `pkgs.fetchpatch`
-  # result) must still force a re-import, so the .nix file it changes is the one
-  # evaluated. The derivation edits `default.nix`.
+  # A patch whose content is unreadable at eval time still forces a re-import.
   drvHash = hash "v";
   systemsDrvNode = flake drvHash "${fixtures}/systems" { };
   drvPatch = runCommandLocal "simulated-fetchpatch-derivation.patch" { } ''
@@ -68,9 +63,7 @@ let
   patchedDrv = patchTree { ${drvHash} = [ drvPatch ]; } treeDrv;
 
   untouched = patchTree { } tree;
-  # A third position for the shared patched source: a top-level alias of the
-  # same `systems` node under a different attribute name. Memoization by narHash
-  # collapses all three to one derivation.
+  # A top-level alias: memoisation collapses all three positions to one.
   tree3 = tree // {
     systemsCopy = systemsNode;
   };
@@ -84,8 +77,7 @@ let
     }).outPath;
 in
 [ ]
-# `lib.optional COND MSG` emits MSG (a failure) when COND is true, so each
-# condition below is the negation of the property being asserted.
+# Each condition below is the negation of the property asserted.
 
 ++ lib.optional (untouched.dep1 != tree.dep1) "tree: unpatched node is the identical value"
 ++ lib.optional (untouched.systems != tree.systems) "tree: unpatched leaf is the identical value"
@@ -109,17 +101,12 @@ in
 ++ lib.optional (
   patched.dep1.outPath != tree.dep1.outPath
 ) "tree: a re-imported-but-unpatched parent keeps its own source"
-# A derivation patch whose content cannot be read at eval time still forces a
-# re-import, so the .nix file it edits is the one evaluated.
+# A derivation patch still forces a re-import.
 ++ lib.optional (
   patchedDrv.systemsDrv.value or null != "patched-by-derivation"
 ) "tree: a derivation patch forces re-import of a .nix file"
-# Memoization: `systems` is patched but reached from three positions (root,
-# `dep1.inputs.systems` via follows, and `systemsCopy`). After the rewrite each
-# distinct source is re-imported exactly once, so all three positions share the
-# same patched derivation. Under the old per-position code the `systemsCopy`
-# position carried a different derivation name and outPath, so this guard fails
-# on regression to per-position re-import.
+# All three positions (root, `follows`, alias) must share one derivation;
+# per-position re-import would give them different names and outPaths.
 ++ lib.optional (
   patched3.systems.outPath != patched3.systemsCopy.outPath
 ) "memo: systems shared between two top-level positions"
@@ -132,3 +119,18 @@ in
 ++ lib.optional (
   patched3.systems.outPath != systemsPatchedOut
 ) "memo: systems equals the single memoized patched derivation"
+++ lib.optional (
+  !builtins.all (k: builtins.hasAttr k patched3.dep1) (builtins.attrNames tree.dep1)
+) "no-impact: reconstructed node keeps all original attrs"
+++ lib.optional (
+  patched3.dep1 ? sourceInfo
+) "no-impact: child-only node carries no audit sourceInfo"
+++ lib.optional (
+  untouched != builtins.removeAttrs tree [ "self" ]
+) "regression: empty-patch deep no-impact"
+++ lib.optional (
+  patched.systems.sourceInfo.baseNarHash or null != sysHash
+) "audit: own-patched node records baseNarHash"
+++ lib.optional (
+  patched.systems.sourceInfo.fipPatches or null != [ systemsPatch ]
+) "audit: own-patched node records fipPatches"
